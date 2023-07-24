@@ -4,11 +4,11 @@ using System.Numerics;
 using System.Collections.Generic;
 using ChessChallenge.API;
 
-public struct EvaluatedMove
-{
-    public Move Move { get; set; }
-    public float Evaluation { get; set; }
-}
+//public struct EvaluatedMove
+//{
+//    public Move Move { get; set; }
+//    public float Evaluation { get; set; }
+//}
 
 public class MyBot : IChessBot
 {
@@ -17,46 +17,6 @@ public class MyBot : IChessBot
      * Captures
      * Attacks
      */
-
-    // TODO:
-    // - Evaluate the position AFTER our move.
-    // - Check for our captures - Done
-    // - Check for opponent captures - Done
-    // - Evaluate best capture - Done?
-    // - Evaluate if capture puts piece at risk - Done
-    // - Evaluate if we should capture anyway - Done
-    // - Check for promotions - Done
-    // - Check for SAFE promotions - Done
-    // - Evaluate Captures vs Promotions - Done
-    // - Do we defend a previously undefended piece?
-    // - Do we leave a piece hanging?
-    // - Evaluation formula
-    // - Look at opponents potential captures
-
-
-    /*
-     * Iterate over all legal moves.
-     * Check each move, assign each move an evaluation based on its impact to the board.
-     */
-
-    //public Move Think(Board board, Timer timer)
-    //{
-    //    return EvaluateMoves(board.GetLegalMoves(), 5).OrderByDescending(m => m).First().Move;
-    //}
-
-    //private EvaluatedMove[] EvaluateMoves(Move[] moves, int depth)
-    //{
-    //    var evaluatedMoves = new EvaluatedMove[moves.Length];
-    //    for (int i = 0; i < depth; i++)
-    //    {
-    //        foreach (var move in moves)
-    //        {
-
-    //        }
-    //    }
-
-    //    return evaluatedMoves;
-    //}
 
     // Piece values: null, pawn, knight, bishop, rook, queen, king
     private int[] pieceValues = { 0, 100, 300, 300, 500, 900, 10000 };
@@ -71,8 +31,9 @@ public class MyBot : IChessBot
         var moveToPlay = new Move();
         var highestValueCapture = 0;
         //var highestValueAttack = 0;
-        //var moveReason = string.Empty;
+        var moveReason = string.Empty;
 
+        /// Wait half a second before making a move so my simple human eyes can actually follow whats happening...
         //System.Threading.Thread.Sleep(500);
 
         foreach (Move move in allLegalMoves)
@@ -88,7 +49,7 @@ public class MyBot : IChessBot
             if (DoesMoveResultInDraw(board, move))
                 continue;
 
-            var movePutsAtRisk = MovePutsPieceAtRisk(board, move, out var pieceAtRiskValue);
+            var movePutsAtRisk = DoesMovePutsPieceAtRisk(board, move, out var pieceAtRiskValue);
             var moveCaptures = IsMoveCapture(board, move, out var capturedPieceValue);
             var moveSafelyPromotes = IsMoveSafePromotion(board, move);
             var moveDisqualifysCastling = DoesMoveDisqualifyCastling(board, move);
@@ -103,7 +64,7 @@ public class MyBot : IChessBot
                     continue;
 
                 moveToPlay = move;
-                //moveReason = $"We can capture a {board.GetPiece(move.TargetSquare)} with a {move.MovePieceType}.";
+                moveReason = $"We can capture a {board.GetPiece(move.TargetSquare)} with a {move.MovePieceType}.";
                 highestValueCapture = capturedPieceValue;
             }
 
@@ -111,21 +72,21 @@ public class MyBot : IChessBot
             if (move.IsPromotion && move.PromotionPieceType == PieceType.Queen && moveSafelyPromotes && highestValueCapture < pieceValues[(int)PieceType.Knight])
             {
                 moveToPlay = move;
-                //moveReason = $"We can promote to a {move.PromotionPieceType} safely as a {move.MovePieceType}.";
+                moveReason = $"We can promote to a {move.PromotionPieceType} safely as a {move.MovePieceType}.";
             }
 
             /// If the move puts our opponent into check and the best possible capture we have so far is less than a Rook, use this Move.
             if (!movePutsAtRisk && moveChecks && highestValueCapture < pieceValues[(int)PieceType.Rook])
             {
                 moveToPlay = move;
-                //moveReason = $"We can give a check.";
+                moveReason = $"We can give a check.";
             }
 
             /// If the move Castles and does not put us at risk, and we can't currently capture a piece or promote safely or cause a check, use this Move.
             if (move.IsCastles && !movePutsAtRisk && highestValueCapture < pieceValues[(int)PieceType.Knight] && !moveSafelyPromotes && !moveChecks)
             {
                 moveToPlay = move;
-                //moveReason = $"We can castle.";
+                moveReason = $"We can castle.";
             }
 
             if (!movePutsAtRisk && !moveDisqualifysCastling)
@@ -136,10 +97,10 @@ public class MyBot : IChessBot
         if (moveToPlay.IsNull)
         {
             moveToPlay = notTerribleMoves.Count > 0 ? notTerribleMoves[new Random().Next(notTerribleMoves.Count)] : allLegalMoves[new Random().Next(allLegalMoves.Length)];
-            //moveReason = notTerribleMoves.Contains(moveToPlay) ? "We chose from our not terrible moves" : "We're bad and chose randomly.";
+            moveReason = notTerribleMoves.Contains(moveToPlay) ? "We chose from our not terrible moves" : "We're bad and chose randomly.";
         }
 
-        //Console.WriteLine(moveReason);
+        Console.WriteLine(moveReason);
         return moveToPlay;
     }
 
@@ -185,7 +146,7 @@ public class MyBot : IChessBot
         return !board.SquareIsAttackedByOpponent(move.TargetSquare);
     }
 
-    private bool MovePutsPieceAtRisk(Board board, Move move, out int pieceValue)
+    private bool DoesMovePutsPieceAtRisk(Board board, Move move, out int pieceValue)
     {
         pieceValue = pieceValues[(int)move.MovePieceType];
         var atRisk = board.SquareIsAttackedByOpponent(move.TargetSquare);
