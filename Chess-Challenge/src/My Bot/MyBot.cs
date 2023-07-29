@@ -4,104 +4,172 @@ using System.Numerics;
 using System.Collections.Generic;
 using ChessChallenge.API;
 
-//public struct EvaluatedMove
-//{
-//    public Move Move { get; set; }
-//    public float Evaluation { get; set; }
-//}
-
 public class MyBot : IChessBot
 {
-    /*
-     * Checks
-     * Captures
-     * Attacks
-     */
-
-    // Piece values: null, pawn, knight, bishop, rook, queen, king
-    private int[] pieceValues = { 0, 100, 300, 300, 500, 900, 10000 };
+    /// <summary>
+    /// Piece values: null, pawn, knight, bishop, rook, queen, king
+    /// </summary>
+    private int[] pieceValues = { 0, 100, 300, 300, 500, 900, 0 };
+    private int turnCount, totalPieceValue, opponentTotalPieceValue;
+    private List<Piece> movedPiecesList = new();
 
     public Move Think(Board board, Timer timer)
     {
-        /// Cache all legal moves.
-        var allLegalMoves = board.GetLegalMoves();
-        var notTerribleMoves = new List<Move>();
+        turnCount += 1;
+        totalPieceValue = GetTotalPieceValues(board, out opponentTotalPieceValue);
+        var bestMoveEvaluation = int.MinValue;
+        var bestPotentialMoves = new List<Move>();
 
-        /// Default to picking a random move to play.
-        var moveToPlay = new Move();
-        var highestValueCapture = 0;
-        //var highestValueAttack = 0;
-        var moveReason = string.Empty;
+        //System.Threading.Thread.Sleep(1500);
 
-        /// Wait half a second before making a move so my simple human eyes can actually follow whats happening...
-        //System.Threading.Thread.Sleep(500);
-
-        foreach (Move move in allLegalMoves)
+        foreach (var move in board.GetLegalMoves())
         {
-            /// If the move is Checkmate, play it.
-            if (IsMoveCheckmate(board, move))
+            var moveScore = EvaluateMove(board, move);
+            if (moveScore > bestMoveEvaluation)
             {
-                moveToPlay = move;
-                break;
+                bestPotentialMoves.Clear();
+                bestPotentialMoves.Add(move);
+                bestMoveEvaluation = moveScore;
             }
+            else if (moveScore == bestMoveEvaluation)
+                bestPotentialMoves.Add(move);            
+        }
+        var chosenMove = bestPotentialMoves[new Random().Next(0, bestPotentialMoves.Count)];
 
-            /// Skip if move results in a draw.
-            if (DoesMoveResultInDraw(board, move))
-                continue;
+        var movePiece = board.GetPiece(chosenMove.StartSquare);
+        if (!movedPiecesList.Contains(movePiece))
+            movedPiecesList.Add(movePiece);
 
-            var movePutsAtRisk = DoesMovePutsPieceAtRisk(board, move, out var pieceAtRiskValue);
-            var moveCaptures = IsMoveCapture(board, move, out var capturedPieceValue);
-            var moveSafelyPromotes = IsMoveSafePromotion(board, move);
-            var moveDisqualifysCastling = DoesMoveDisqualifyCastling(board, move);
-            var moveChecks = IsMoveCheck(board, move);
-            //var moveLeavesPieceHanging = PiecesUnderAttacks(board, move);
+        return chosenMove;
+    }
 
-            /// Evaluate if the move is a capture.
-            if (capturedPieceValue > highestValueCapture)
-            {
-                /// Evaluate if the capture puts us at risk - Don't capture if we would immediately be taken and we are worth more or the same.
-                if ((movePutsAtRisk && pieceAtRiskValue >= capturedPieceValue) || move.MovePieceType == PieceType.King && (board.HasKingsideCastleRight(board.IsWhiteToMove) || board.HasQueensideCastleRight(board.IsWhiteToMove)))
-                    continue;
-
-                moveToPlay = move;
-                moveReason = $"We can capture a {board.GetPiece(move.TargetSquare)} with a {move.MovePieceType}.";
-                highestValueCapture = capturedPieceValue;
-            }
-
-            /// If we can promote (to a Queen) safely and if we can't currently capture a piece, use this Move.
-            if (move.IsPromotion && move.PromotionPieceType == PieceType.Queen && moveSafelyPromotes && highestValueCapture < pieceValues[(int)PieceType.Knight])
-            {
-                moveToPlay = move;
-                moveReason = $"We can promote to a {move.PromotionPieceType} safely as a {move.MovePieceType}.";
-            }
-
-            /// If the move puts our opponent into check and the best possible capture we have so far is less than a Rook, use this Move.
-            if (!movePutsAtRisk && moveChecks && highestValueCapture < pieceValues[(int)PieceType.Rook])
-            {
-                moveToPlay = move;
-                moveReason = $"We can give a check.";
-            }
-
-            /// If the move Castles and does not put us at risk, and we can't currently capture a piece or promote safely or cause a check, use this Move.
-            if (move.IsCastles && !movePutsAtRisk && highestValueCapture < pieceValues[(int)PieceType.Knight] && !moveSafelyPromotes && !moveChecks)
-            {
-                moveToPlay = move;
-                moveReason = $"We can castle.";
-            }
-
-            if (!movePutsAtRisk && !moveDisqualifysCastling)
-                notTerribleMoves.Add(move);
+    private int GetTotalPieceValues(Board board, out int totalOpponentPieceValue)
+    {
+        var ourTotalPieceValue = 0;
+        totalOpponentPieceValue = 0;
+        for (int i = 0; i < 64; i++)
+        {
+            var piece = board.GetPiece(new Square(i));
+            var pieceValue = pieceValues[(int)piece.PieceType];
+            totalPieceValue = board.IsWhiteToMove == piece.IsWhite ? ourTotalPieceValue += pieceValue : totalOpponentPieceValue += pieceValue;
         }
 
-        /// If we have not found a move, make a random move from our 'Not Terrible' moves if possible, otherwise just play a random move.
-        if (moveToPlay.IsNull)
+        return ourTotalPieceValue;
+    }
+
+    private int EvaluateMove(Board board, Move move)
+    {
+        var evalScore = 0;
+
+        /// Always play mate in 1 or En Passant (Which is a moral checkmate).
+        if (IsMoveCheckmate(board, move) || move.IsEnPassant)
+            return int.MaxValue;
+
+        /// Encourage castling significantly.
+        if (move.IsCastles)
+            evalScore += 75;
+
+        /// Discourage repeated positions significantly.
+        if (IsMoveRepeat(board, move))
+            evalScore -= 75;
+
+        /// Encourage opening pawn moves and later pawn moves slightly.
+        if (move.MovePieceType == PieceType.Pawn)
         {
-            moveToPlay = notTerribleMoves.Count > 0 ? notTerribleMoves[new Random().Next(notTerribleMoves.Count)] : allLegalMoves[new Random().Next(allLegalMoves.Length)];
-            moveReason = notTerribleMoves.Contains(moveToPlay) ? "We chose from our not terrible moves" : "We're bad and chose randomly.";
+            /// Encourage center pawns to move forward for the first two moves.
+            if (turnCount <= 2) //&& (move.TargetSquare.Name == "e4" || move.TargetSquare.Name == "d3" || move.TargetSquare.Name == "e5" || move.TargetSquare.Name == "d6"))
+            {
+                switch (move.TargetSquare.Name)
+                {
+                    case "e4":
+                    case "d3":
+                    case "e5":
+                    case "d6":
+                        evalScore += 15;
+                        break;
+                }
+            }
+            else if (turnCount >= 20)
+                evalScore += 15;
+        }
+        /// Encourage moving undeveloped Knights/Bishops after the initial pawn moves
+        else if (turnCount > 2 && turnCount <= 6 && (move.MovePieceType == PieceType.Bishop || move.MovePieceType == PieceType.Knight))
+            evalScore += 25;
+
+        /// Encourage captures by the value of the captured piece.
+        if (IsMoveCapture(board, move, out var capturedPieceValue))
+            evalScore += capturedPieceValue;
+
+        /// Discourage moves that will likely result in our capture by the value of our piece.
+        if (DoesMovePutPieceAtRisk(board, move))
+            evalScore -= pieceValues[(int)move.MovePieceType];
+
+        /// Encourage checks slightly after initial development.
+        if (turnCount >= 6  && IsMoveCheck(board, move))
+            evalScore += 25;
+
+        /// Discourage moves that prevent us from castling massively.
+        if ((board.HasKingsideCastleRight(board.IsWhiteToMove) || board.HasQueensideCastleRight(board.IsWhiteToMove)) && !move.IsCastles && move.MovePieceType == PieceType.King)
+            evalScore -= 1000;
+
+        /// Encourage moving a piece that has not been moved before slightly.
+        if (!movedPiecesList.Contains(board.GetPiece(move.StartSquare)))
+            evalScore += 15;
+
+        /// Encourage promotions massively.
+        if (!board.SquareIsAttackedByOpponent(move.TargetSquare) && move.PromotionPieceType == PieceType.Queen)
+            evalScore += 900;
+
+        /// Encourage moving away if we are attacked.
+        if (board.SquareIsAttackedByOpponent(move.StartSquare)) 
+            evalScore += 150;
+
+        /// Discourage draws if winning in overall piece value, encourage if we are losing however (Can't win 'em all!) ;)
+        if (DoesMoveResultInDraw(board, move))
+            evalScore = totalPieceValue - opponentTotalPieceValue <= -1000 ? evalScore -= 9999 : evalScore += 9999;
+
+        /// King moves that aren't castling.
+        if (move.MovePieceType == PieceType.King && !move.IsCastles)
+        {
+            /// Encourage moves towards the opposing King if we don't have much piece value left on the board (Inferring we are in the endgame.)
+            if (totalPieceValue <= 1000)
+            {
+                var kingDistancePreMove = GetKingsDistance(board);
+                board.MakeMove(move);
+                var kingDistancePostMove = GetKingsDistance(board);
+                board.UndoMove(move);
+
+                if (kingDistancePostMove < kingDistancePreMove)
+                    evalScore += 50;
+            }
+            /// Otherwise if we aren't in the endgame, discourage moving the King towards the opponent.
+            else
+                evalScore -= 50;
         }
 
-        Console.WriteLine(moveReason);
-        return moveToPlay;
+        /// Assess our opponents immediate next move which could follow this one.
+        board.MakeMove(move);
+        foreach (var opponentMove in board.GetLegalMoves())
+        {
+            /// Don't open ourselves to 1 move check mates.
+            if (IsMoveCheckmate(board, opponentMove))
+                evalScore -= 9999;
+
+            /// Don't open ourselves up to checks.
+            if (IsMoveCheck(board, opponentMove))
+                evalScore -= 25;
+
+            /// Evaluate possible draw positions and if we want those.
+            if (DoesMoveResultInDraw(board, opponentMove))
+                evalScore = totalPieceValue - opponentTotalPieceValue <= -1000 ? evalScore -= 9999 : evalScore += 9999;
+
+            /// Don't open ourselves up to captures.
+            if (IsMoveCapture(board, opponentMove, out var ourCapturedPieceValue))
+                evalScore -= ourCapturedPieceValue;
+        }
+        board.UndoMove(move);
+
+        return evalScore;
     }
 
     /// <summary>
@@ -118,21 +186,44 @@ public class MyBot : IChessBot
         return isMate;
     }
 
+    /// <summary>
+    /// Return whether the move captures an opposing piece, outing the value of the piece captured and the value of the attacker.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <param name="capturedPieceValue"></param>
+    /// <returns></returns>
     private bool IsMoveCapture(Board board, Move move, out int capturedPieceValue)
     {
-        var capturedPiece = board.GetPiece(move.TargetSquare);
-        capturedPieceValue = pieceValues[(int)capturedPiece.PieceType];
-        return capturedPieceValue > 0;
+        capturedPieceValue = pieceValues[(int)board.GetPiece(move.TargetSquare).PieceType];
+        return !IsSquareUnderThreat(board, move.TargetSquare);
+
+        //var capturedPiece = board.GetPiece(move.TargetSquare);
+        //capturedPieceValue = pieceValues[(int)capturedPiece.PieceType];
+        //attackingPieceValue = pieceValues[(int)move.MovePieceType];
+        //return capturedPieceValue > 0;
     }
 
+    /// <summary>
+    /// Returns whether the move will result in a draw.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <returns></returns>
     private bool DoesMoveResultInDraw(Board board, Move move)
     {
         board.MakeMove(move);
-        var isDraw = board.IsDraw();
+        var isDraw = board.IsInsufficientMaterial() || (!board.IsInCheck() && board.GetLegalMoves().Length == 0) || board.FiftyMoveCounter >= 100;
         board.UndoMove(move);
         return isDraw;
     }
 
+    /// <summary>
+    /// Returns whether the Move results in a check.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <returns></returns>
     private bool IsMoveCheck(Board board, Move move)
     {
         board.MakeMove(move);
@@ -141,20 +232,55 @@ public class MyBot : IChessBot
         return isCheck;
     }
 
-    private bool IsMoveSafePromotion(Board board, Move move)
+    /// <summary>
+    /// Returns whether
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <param name="pieceValue"></param>
+    /// <returns></returns>
+    private bool DoesMovePutPieceAtRisk(Board board, Move move)
     {
-        return !board.SquareIsAttackedByOpponent(move.TargetSquare);
+        // TODO: Check if the piece is actually at risk - Are we defended and the attackers piece value is greater than ours.
+        //pieceValue = pieceValues[(int)move.MovePieceType];
+        //return board.SquareIsAttackedByOpponent(move.TargetSquare);
+        board.MakeMove(move);
+        board.ForceSkipTurn();
+        var underThreat = IsSquareUnderThreat(board, move.TargetSquare);
+        board.UndoSkipTurn();
+        board.UndoMove(move);
+        return underThreat;
     }
 
-    private bool DoesMovePutsPieceAtRisk(Board board, Move move, out int pieceValue)
+    private bool IsSquareUnderThreat(Board board, Square square)
     {
-        pieceValue = pieceValues[(int)move.MovePieceType];
-        var atRisk = board.SquareIsAttackedByOpponent(move.TargetSquare);
-        return atRisk;
+        int defenderScore = 0, attackerScore = 0;
+
+        foreach (var move in board.GetLegalMoves())        
+            if (move.TargetSquare == square)
+                defenderScore += pieceValues[(int)move.MovePieceType];
+        
+        board.ForceSkipTurn();
+        foreach (var opponentMove in board.GetLegalMoves())
+            if (opponentMove.TargetSquare == square)
+                attackerScore += pieceValues[(int)opponentMove.MovePieceType];
+        board.UndoSkipTurn();
+
+        return defenderScore < attackerScore;
     }
 
-    private bool DoesMoveDisqualifyCastling(Board board, Move move)
+    private int GetKingsDistance(Board board)
     {
-        return !move.IsCastles && (move.MovePieceType == PieceType.King || move.MovePieceType == PieceType.Rook);
+        var ourKingSquare = board.GetKingSquare(board.IsWhiteToMove);
+        var opponentKingSquare = board.GetKingSquare(!board.IsWhiteToMove);
+        return Math.Abs(ourKingSquare.File - opponentKingSquare.File) + Math.Abs(ourKingSquare.Rank - opponentKingSquare.Rank);
+    }
+
+    private bool IsMoveRepeat(Board board, Move move)
+    {
+        board.MakeMove(move);
+        var isRepeat = board.IsRepeatedPosition();
+        board.UndoMove(move);
+        return isRepeat;
     }
 }
