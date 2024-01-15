@@ -4,3 +4,6 @@
 dotnet_diagnostic.CS8602.severity = silent
 # CS8618: Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
 dotnet_diagnostic.CS8618.severity = silent
+
+# CS1587: XML comment is not placed on a valid language element
+dotnet_diagnostic.CS1587.severity = none

@@ -7,6 +7,8 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>True</GenerateDocumentationFile>
+    <DocumentationFile>C:\Users\Peter\OneDrive\Desktop\testing.xml</DocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>

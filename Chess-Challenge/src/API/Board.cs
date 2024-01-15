@@ -285,7 +285,6 @@ namespace ChessChallenge.API
 			return BitboardHelper.SquareIsSet(moveGen.opponentAttackMap, square);
 		}
 
-
 		/// <summary>
 		/// FEN representation of the current position
 		/// </summary>
@@ -307,6 +306,8 @@ namespace ChessChallenge.API
 		/// 64-bit number where each bit that is set to 1 represents a square that contains any type of black piece.
 		/// </summary>
 		public ulong BlackPiecesBitboard => board.colourBitboards[Chess.Board.BlackIndex];
+
+		public ulong WhiteAttackBitboard => moveGen.opponentAttackMap;
 
 		/// <summary>
 		/// 64-bit number where each bit that is set to 1 represents a
