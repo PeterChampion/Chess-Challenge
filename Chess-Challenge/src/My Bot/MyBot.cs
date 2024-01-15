@@ -632,7 +632,6 @@ public class MyBot : IChessBot
             evalScore += 250;
         }
 
-        // TODO: Encourage moves that prevent the opponent from being able to promote a pawn?
         var canOpponentPromote = CanPromoteNextMove(board, true);
         var canOpponentPromotePostMove = CanPromoteNextMove(board, true);
         if (canOpponentPromote && !canOpponentPromotePostMove)
@@ -754,22 +753,22 @@ public class MyBot : IChessBot
             /// Discourage massively if the opponent could mate us in one.
             if (DoesMoveResultInCheckmate(board, opponentMove))
             {
-                moveLogicReason += $"\n Move allows our opponent to checkmate us.";
+                moveLogicReason += $"\n Move allows our opponent to checkmate us. (-9999)";
                 currentEvaluation -= 9999;
             }
 
             /// Discourage if the opponent can check us.
             if (DoesMoveResultInCheck(board, opponentMove) && opponentHasSafeMove)
             {
-                moveLogicReason += $"\n Move allows our opponent to potentially check us safely with the move {opponentMove.StartSquare.Name} to {opponentMove.TargetSquare.Name}";
+                moveLogicReason += $"\n Move allows our opponent to potentially check us safely with the move {opponentMove.StartSquare.Name} to {opponentMove.TargetSquare.Name} (-100)";
                 currentEvaluation -= 100;
             }
 
             /// Discourage/Encourage possible draw positions and if we want those based on the delta of piece value.
             if (DoesMoveResultInDraw(currentBoard, opponentMove))
             {
-                moveLogicReason += $"\n Move allows our opponent to cause a draw.";
-                currentEvaluation += pieceValueDelta >= -600 ? -9999 : 9999;
+                moveLogicReason += $"\n Move allows our opponent to potentially cause a draw. {(pieceValueDelta >= -300 ? "-9999" : "+9999")}";
+                currentEvaluation += pieceValueDelta >= -300 ? -9999 : 9999;
             }
         }
 
