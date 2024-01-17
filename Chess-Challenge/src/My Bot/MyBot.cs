@@ -9,7 +9,7 @@ public class MyBot : IChessBot
     /// <summary>
     /// Piece values: null, pawn, knight, bishop, rook, queen, king
     /// </summary>
-    private int[] pieceValues = { 0, 100, 300, 300, 500, 900, 0 };
+    private int[] pieceValues = { 0, 100, 300, 300, 500, 900, 50 };
     private int turnCount, ourTotalPieceValue, opponentTotalPieceValue, turnsSinceLastPawnMove;
     private int pieceValueDelta => ourTotalPieceValue - opponentTotalPieceValue;
     private bool inEndGame;
@@ -23,19 +23,15 @@ public class MyBot : IChessBot
 
     /*
      * TODO:
-     * Cache current piece value for ourselves and opponent - Done
-     * Determine whether a move is a safe capture - Done
-     * Determine whether the opponent has a safe capture - Done
-     * Determine whether we defend a previously under-defended piece (Would no longer lose an exchange) - DONE
-     * Determine when endgame is in play (Under threshhold of piece value on either side) - DONE
      * Seek draws if losing significantly (If our move IS a draw, or if it creates more chances of our opponent causing a draw!) - PARTIALLY DONE
      * Promote if safe (square is defended and we win exchange) Ensure to treat the promoted piece as a pawn and not a Queen etc! - PARTIALLY DONE
      * Encourage in end game moves that push the opposing King towards the edges of the board. - TBD
      * Encourage in end game moving our pawns towards the end of the board - TBD
      * Encourage in end game moving our King towards center of the board OR towards our pawns (Unless they are close to the end of the board and can promote safely?) - TBD
-     * Encourage moves that attack opposing pieces in a safe manner - DONE
      * Calculate sacrifices! (If this move loses us a piece, but we can then immediately take a piece of HIGHER value safely the next turn) - TBD
-     * Pick from a select range of Chess openings when playing White/Black - Done
+     * Check for passed pawns
+     * Don't take piece value literally from 'pieceValues' array, this should be the base value of a piece which is then modified based on piece position (Number of accessbible squares, defending another valued piece, etc)
+     * Wherever we currently access 'pieceValues' instead we should call the relevant method that does this.
      */
 
     // White Openings:
@@ -79,7 +75,7 @@ public class MyBot : IChessBot
         inEndGame = ourPrimaryPieceCount <= 3 && opponentsPrimaryPieceCount <= 3;
 
         /// Force the bot to delay its move for testing purposes.
-        //System.Threading.Thread.Sleep(2500);
+        //System.Threading.Thread.Sleep(1000);
 
         return FindBestMoveOnBoard(board);
     }
@@ -146,9 +142,8 @@ public class MyBot : IChessBot
     private int EvaluateMove(Board board, Move move)
     {
         var evalScore = 0;
-        var opponentKingSquare = board.GetKingSquare(board.IsWhiteToMove);
+        var opponentKingSquare = board.GetKingSquare(!board.IsWhiteToMove);
         var kingDistanceFromPiece = GetKingsDistanceFromSquare(board, move.StartSquare, board.IsWhiteToMove);
-        var kingDistancesPreMove = GetKingsDistanceFromSquare(board, opponentKingSquare, board.IsWhiteToMove);
         var targetSquare = move.TargetSquare;
         var startSquare = move.StartSquare;
         var movePieceType = move.MovePieceType;
@@ -176,7 +171,7 @@ public class MyBot : IChessBot
 
         /// Immediately look for a different move if this move would result in a draw, and we are not losing by 2 pieces.
         if (DoesMoveResultInDraw(board, move) && pieceValueDelta >= -600)
-            return int.MinValue;
+            return int.MinValue + 1;
 
         /// Encourage moves to a safe position if our current one is under threat (Not defended sufficiently).
         var isStartSquareSafe = IsSquareSafe(board, startSquare);
@@ -193,19 +188,26 @@ public class MyBot : IChessBot
         var moveIsSafeCapture = IsMoveSafeCapture(move, out var capturedPieceValue, out var _);
         if (moveIsSafeCapture)
         {
+            /// Treat pawns that can be captured who are on the verge of promotion as if they were a Queen.
             if (capturedPieceValue == 100 && ((!board.IsWhiteToMove && move.TargetSquare.Rank == 6) || (board.IsWhiteToMove && move.TargetSquare.Rank == 1)))            
-                capturedPieceValue = 900;            
+                capturedPieceValue = 900;
+
+            var initialPieceValue = pieceValue;
+            if (movePieceType == PieceType.King)            
+                pieceValue = 200;            
 
             moveLogicReason += $"\n Move captures a {board.GetPiece(move.TargetSquare)} piece safely. (+{capturedPieceValue - (pieceValue / 10)})";
             evalScore += capturedPieceValue - (pieceValue / 10);
+
+            pieceValue = initialPieceValue;
         }
 
         /// Encourage moves that open up opportunitys to take the opponents piece next move.
         var movePosturesSafeCapture = DoesMovePosturesSafeCapture(board, move, out var potentialNextCapture);
         if (movePosturesSafeCapture && isTargetSquareSafe)
         {
-            moveLogicReason += $"\n Move postures to safely capture a {potentialNextCapture} next turn. (+{(pieceValues[(int)potentialNextCapture] / 2) - (pieceValue / 5)})";
-            evalScore += (pieceValues[(int)potentialNextCapture] / 2) - (pieceValue / 5);
+            moveLogicReason += $"\n Move postures to safely capture a {potentialNextCapture} next turn. (+{(pieceValues[(int)potentialNextCapture] / 2) - (pieceValue / 10)})";
+            evalScore += (pieceValues[(int)potentialNextCapture] / 2) - (pieceValue / 10);
         }
 
         /// Encourage moves that defend pieces that are under threat
@@ -251,6 +253,8 @@ public class MyBot : IChessBot
             evalScore -= 150;
         }
 
+        // TODO: Refactor this to check whether the move actually disqualifys castling
+        // this implementation has the oversight that if the same Rook is moved twice it will treat that as preventing us from castling on either side.
         /// If the move is being made with a Rook whilst we still have the rights to castle...
         if (movePieceType == PieceType.Rook)
         {
@@ -335,8 +339,6 @@ public class MyBot : IChessBot
             evalScore += 50;
         }
 
-        var kingDistancesPostMove = GetKingsDistanceFromSquare(board, opponentKingSquare, board.IsWhiteToMove);
-
         /// In the event of a safe capture being possible with a pawn, but the move would result in stacked pawns, only encourage by half the standard value.
         /// This will increase the odds of another piece capturing instead of the pawn, if possible.
         if (move.IsCapture && movePieceType == PieceType.Pawn)
@@ -395,7 +397,7 @@ public class MyBot : IChessBot
         }
 
         /// Opening turns logic.
-        if (turnCount <= 10)
+        if (turnCount <= 8)
         {
             switch (movePieceType)
             {
@@ -410,7 +412,7 @@ public class MyBot : IChessBot
                     /// Encourage moving Knight/Bishop/Rook pieces if they are on their starting rank within the first few moves.
                     if ((board.IsWhiteToMove && move.StartSquare.Rank == 0 && move.TargetSquare.Rank != 0) || (!board.IsWhiteToMove && move.StartSquare.Rank == 7 && move.TargetSquare.Rank != 7))
                     {
-                        moveLogicReason += $"\n Move takes a {board.GetPiece(move.StartSquare)} away from its starting rank. (+50)";
+                        moveLogicReason += $"\n Move takes a {board.GetPiece(move.StartSquare)} away from its starting rank in the opening. (+50)";
                         evalScore += 50;
                     }
                     break;
@@ -501,15 +503,16 @@ public class MyBot : IChessBot
             }
         }
 
-        /// Discourage pawns next to the King from moving.
         if (movePieceType == PieceType.Pawn)
         {
+            /// Discourage pushing pawns next to the King from moving.
             if (kingDistanceFromPiece <= 1)
             {
                 moveLogicReason += $"\n Move pushes a pawn near our King. (-50)";
                 evalScore -= 50;
             }
-            else
+            /// Otherwise encourage pushing pawns to safe squares.
+            else if (isTargetSquareSafe)
             {
                 moveLogicReason += $"\n Move pushes a pawn. (+15)";
                 evalScore += 15;
@@ -524,7 +527,7 @@ public class MyBot : IChessBot
         }
 
         /// Discourage Knights moving to the edge of the board
-        if (move.MovePieceType == PieceType.Knight)
+        if (movePieceType == PieceType.Knight)
         {
             if (targetSquare.File == 0 || targetSquare.File == 7 || targetSquare.Rank == 0 || targetSquare.Rank == 7)
             {
@@ -538,6 +541,16 @@ public class MyBot : IChessBot
             }
         }
 
+        /// Discourage moving Minor Pieces back to their starting rank.
+        if (movePieceType == PieceType.Knight || movePieceType == PieceType.Bishop)
+        {
+            if ((board.IsWhiteToMove && move.StartSquare.Rank == 0 && move.TargetSquare.Rank == 0) || (!board.IsWhiteToMove && move.StartSquare.Rank == 7 && move.TargetSquare.Rank == 7))
+            {
+                moveLogicReason += $"\n Move would put a {board.GetPiece(move.StartSquare)} back on its starting rank. (-25)";
+                evalScore -= 25;
+            }
+        }
+
         /// Encourage moving a non pawn piece that is on its starting file
         if (movePieceType != PieceType.Pawn && move.MovePieceType != PieceType.King && ((board.IsWhiteToMove && startSquare.Rank == 0 && targetSquare.Rank != 0) || (!board.IsWhiteToMove && startSquare.Rank == 7 && targetSquare.Rank != 7)))
         {
@@ -546,7 +559,7 @@ public class MyBot : IChessBot
         }
 
         /// Encourage safe promotions to a Queen.
-        if (IsSquareSafe(board, move.TargetSquare) && move.IsPromotion)
+        if (isTargetSquareSafe && move.IsPromotion)
         {
             if (move.PromotionPieceType != PieceType.Queen)
                 evalScore -= 1000;
@@ -560,29 +573,59 @@ public class MyBot : IChessBot
         /// King moves that aren't castling.
         if (movePieceType == PieceType.King && !move.IsCastles)
         {
+            var kingDistancesPreMove = GetKingsDistanceFromSquare(board, opponentKingSquare, board.IsWhiteToMove);
+            var kingDistancesPostMove = GetKingsDistanceFromSquare(board, move.TargetSquare, !board.IsWhiteToMove);
             /// Encourage moves towards the opposing King if we are in the end game.
             if (inEndGame)
             {
-                if (kingDistancesPostMove < kingDistancesPreMove)
+                // TODO: Only do the below if we also have a Rook or Queen in play AND we are ahead in material.
+                if (kingDistancesPostMove < kingDistancesPreMove && pieceValueDelta > 0)
                 {
-                    moveLogicReason += $"\n Move pushes our King towards the opponent. (+50)";
-                    evalScore += 50;
+                    moveLogicReason += $"\n Move pushes our King towards the opponent. (+75)";
+                    evalScore += 75;
                 }
-                /// Otherwise if we aren't in the endgame, discourage moving the King towards the opponent.
+                // TODO: If the above condition is not met, instead move towards an undefended opponents pawn.
                 else
                 {
-                    moveLogicReason += $"\n Move pushes our King towards the opponent. (-50)";
-                    evalScore -= 50;
-                }
+                    Square closestPawnSquare = new(0);
+                    int closestPawnDistance = int.MaxValue;
+
+                    for (int i = 0; i < 64; i++)
+                    {
+                        var piece = board.GetPiece(new Square(i));
+                        if (piece.IsPawn && piece.IsWhite != board.IsWhiteToMove)
+                        {
+                            var pawnDistanceFromKing = GetKingsDistanceFromSquare(board, piece.Square, board.IsWhiteToMove);
+                            if (!IsSquareDefended(board, piece.Square, move.StartSquare, true) && pawnDistanceFromKing < closestPawnDistance)
+                            {
+                                closestPawnDistance = pawnDistanceFromKing;
+                                closestPawnSquare = piece.Square;
+                            }
+                        }
+                    }
+
+                    if (closestPawnDistance != int.MaxValue && GetKingsDistanceFromSquarePostMove(board, move, closestPawnSquare, board.IsWhiteToMove) < closestPawnDistance)
+                    {
+                        moveLogicReason += $"\n Move pushes our King towards an undefended pawn. (+50)";
+                        evalScore += 50;
+                    }
+                }                
+            }
+            /// Otherwise if we aren't in the endgame, discourage moving the King towards the opponent.
+            else
+            {
+                moveLogicReason += $"\n Move pushes our King towards the opponent. (-50)";
+                evalScore -= 50;
             }
         }
 
+        /// Calculate both sides King safety.
         var ourKingSafety = GetKingSafety(board, false);
         var ourKingSafetyPostMove = GetKingSafetyPostMove(board, move, false);
         var opponentKingSafety = GetKingSafety(board, true);
         var opponentKingSafetyPostMove = GetKingSafetyPostMove(board, move, true);
 
-        /// If our King has less possible moves, the move is safe and we are not in the End Game, we consider this as him being safer.
+        /// If our King has less possible moves, the move is safe and we are not in the End Game, we consider this as him being safer (Surrounded by his loyal subjects).
         if (ourKingSafetyPostMove < ourKingSafety && isTargetSquareSafe && !inEndGame && move.MovePieceType == PieceType.King)
         {
             moveLogicReason += $"\n Move improves OUR King safety. (+25)";
@@ -596,10 +639,9 @@ public class MyBot : IChessBot
             evalScore += 25;
         }
 
+        /// Encourage safely increasing our control of the other side of board.
         var boardControlScore = GetBoardControlScore(board);
         var boardControlScorePostMove = GetBoardControlScorePostMove(board, move);
-
-        /// Encourage safely increasing our control of the other side of board.
         if (boardControlScorePostMove > boardControlScore && isTargetSquareSafe && movePieceType != PieceType.King)
         {
             moveLogicReason += $"\n Move increases our control of the board (+25)";
@@ -607,20 +649,19 @@ public class MyBot : IChessBot
         }
 
         /// Encourage moves to a defended square.
-        var movesToDefendedSquare = IsSquareDefended(board, move.TargetSquare, move.StartSquare);
+        var movesToDefendedSquare = IsSquareDefended(board, move.TargetSquare, move.StartSquare, false) && isTargetSquareSafe;
         if (movesToDefendedSquare && movePieceType != PieceType.King)
         {
             moveLogicReason += $"\n Moves piece to a defended square. (+25)";
             evalScore += 25;
         }
 
-        // TODO: Instead calculate if this move increases OVERALL piece mobility, this seems much better?
         /// Encourage move if it increases this pieces mobility.
-        var pieceLegalMovesCount = GetPieceLegalMoves(board, move.StartSquare);
-        var pieceLegalMovesCountPostMove = GetPieceLegalMovesPostMove(board, move);
-        if (pieceLegalMovesCountPostMove > pieceLegalMovesCount && isTargetSquareSafe)
+        var overallMobilityScore = GetOverallMobilityScore(board, move.StartSquare);
+        var overallMobilityScorePostMove = GetOverallMobilityScorePostMove(board, move);
+        if (overallMobilityScorePostMove > overallMobilityScore && isTargetSquareSafe)
         {
-            moveLogicReason += $"\n Moves to a square with more options. (+50)";
+            moveLogicReason += $"\n Moves to a square that gives us more options. (+50)";
             evalScore += 50;
         }
         
@@ -632,8 +673,9 @@ public class MyBot : IChessBot
             evalScore += 250;
         }
 
+        /// Encourage moves that prevent an opponent from promoting.
         var canOpponentPromote = CanPromoteNextMove(board, true);
-        var canOpponentPromotePostMove = CanPromoteNextMove(board, true);
+        var canOpponentPromotePostMove = CanPromoteNextMovePostMove(board, move, true);
         if (canOpponentPromote && !canOpponentPromotePostMove)
         {
             moveLogicReason += $"\n Move prevents the opponent from promoting a pawn next move. (+300)";
@@ -641,6 +683,20 @@ public class MyBot : IChessBot
         }
 
         return evalScore;
+    }
+
+    private bool CanPromoteNextMovePostMove(Board board, Move move, bool opponent)
+    {
+        board.MakeMove(move);
+        if (opponent)
+            board.ForceSkipTurn();
+
+        var canPromoteNextMove = CanPromoteNextMove(board, opponent);
+
+        if (opponent)
+            board.UndoSkipTurn();
+        board.UndoMove(move);
+        return canPromoteNextMove;
     }
 
     private bool CanPromoteNextMove(Board board, bool opponent)
@@ -664,6 +720,12 @@ public class MyBot : IChessBot
         return canPromote;
     }
 
+    /// <summary>
+    /// Returns whether the passed move gives the chance for a potential checkmate next turn.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <returns></returns>
     private bool DoesMovePostureCheckmate(Board board, Move move)
     {
         board.MakeMove(move);
@@ -686,25 +748,47 @@ public class MyBot : IChessBot
         return checkmateFound;
     }
 
-    private int GetPieceLegalMoves(Board board, Square pieceSquare)
+    /// <summary>
+    /// Returns the overall mobility score (legal moves) that can be taken.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="pieceSquare"></param>
+    /// <returns></returns>
+    private int GetOverallMobilityScore(Board board, Square pieceSquare)
     {
-        var pieceLegalMoveCount = 0;
+        var mobilityScore = 0;
 
+        // TODO: Every legal move should not perhaps be counted, but instead every safe legal move.
         foreach (var move in board.GetLegalMoves())        
-            if (move.StartSquare == pieceSquare)
-                pieceLegalMoveCount++;
+            if (IsMoveSafe(board, move, out var _))
+                mobilityScore++;
         
-        return pieceLegalMoveCount;
+        return mobilityScore;
     }
 
-    private int GetPieceLegalMovesPostMove(Board board, Move move)
+    /// <summary>
+    /// Returns the overall mobility score (legal moves) that can be taken after this move.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <returns></returns>
+    private int GetOverallMobilityScorePostMove(Board board, Move move)
     {
         board.MakeMove(move);
-        var pieceLegalMoveCount = GetPieceLegalMoves(board, move.TargetSquare);
+        board.ForceSkipTurn();
+        var mobilityScore = GetOverallMobilityScore(board, move.TargetSquare);
+        board.UndoSkipTurn();
         board.UndoMove(move);
-        return pieceLegalMoveCount;
+        return mobilityScore;
     }
 
+    /// <summary>
+    /// Returns the total amount of piece value threatened (hanging/unsafe).
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <param name="opponents"></param>
+    /// <returns></returns>
     private int GetTotalPieceValueThreatened(Board board, Move move, bool opponents)
     {
         var pieceValueThreatened = 0;
@@ -725,6 +809,12 @@ public class MyBot : IChessBot
         return pieceValueThreatened;
     }
 
+    /// <summary>
+    /// Updates currentEvaluation based on the potential responses of the opponent.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <param name="currentEvaluation"></param>
     private void AssessOpponentResponses(Board board, Move move, ref int currentEvaluation)
     {
         /// Make OUR move, so that we can look at the potential board state from the opponents perspective.
@@ -776,6 +866,13 @@ public class MyBot : IChessBot
         board.UndoMove(move);
     }
 
+    /// <summary>
+    /// Returns whether the move passed prevents the safe capture of squares which contain friendly pieces.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <param name="protectedSquares"></param>
+    /// <returns></returns>
     private bool DoesMovePreventSafeCaptures(Board board, Move move, out List<Square> protectedSquares)
     {
         protectedSquares = new();
@@ -819,6 +916,13 @@ public class MyBot : IChessBot
         return protectedSquares.Count > 0 && newThreatenedSquares.Count == 0;
     }
 
+    /// <summary>
+    /// Returns whether the move passed postures to safely capture another piece next turn, outing the pieceType of the highest value piece threatened by this move.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <param name="potentialNextCapture"></param>
+    /// <returns></returns>
     private bool DoesMovePosturesSafeCapture(Board board, Move move, out PieceType potentialNextCapture)
     {
         potentialNextCapture = PieceType.None;
@@ -902,6 +1006,12 @@ public class MyBot : IChessBot
         return isCheckmate;
     }
 
+    /// <summary>
+    /// Returns whether the passed Square is safe by checking whether the square is attacked by our opponent or if we have enough material defending the square if it is contested.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="square"></param>
+    /// <returns></returns>
     private bool IsSquareSafe(Board board, Square square)
     {
         board.ForceSkipTurn();
@@ -978,8 +1088,7 @@ public class MyBot : IChessBot
         {
             var pieceValue = pieceValues[(int)board.GetPiece(move.TargetSquare).PieceType];
             
-            // TODO: Only do the below if the opponents piece can promote next turn? (Square ahead is empty)
-            /// Treat pawns that are on the verge of promotion as Queens.
+            /// Treat pawns that are on the verge of promotion as if they are a Queen.
             if (pieceValue == 100 && CanPromoteNextMove(board, true) && ((!board.IsWhiteToMove && move.TargetSquare.Rank == 6) || (board.IsWhiteToMove && move.TargetSquare.Rank == 1)))
                 pieceValue = 900;
 
@@ -988,10 +1097,10 @@ public class MyBot : IChessBot
             opponentTotalPieceValue += pieceValue;
         }
 
-        /// If the opponent is looking at a square with EQUAL pieces OR MORE pieces and their pieces are of LOWER value - UNSAFE
+        /// If the opponent is looking at a square with EQUAL pieces OR MORE pieces and their pieces are of EQUAL OR LOWER value - UNSAFE
         if (opponentPieceValues.Count == ourPieceValues.Count || (opponentPieceValues.Count >= ourPieceValues.Count && opponentTotalPieceValue <= ourTotalPieceValue))
         {
-            moveLogic = $"CASE 1 Opponent has {opponentPieceValues.Count} pieces defending of {opponentTotalPieceValue} total value that would be lost in an exchange chain, whilst we have {ourPieceValues.Count} pieces attacking of {ourTotalPieceValue} total value.";
+            moveLogic = $"CASE 1 Opponent has {opponentPieceValues.Count} pieces defending of {(opponentPieceValues.Count == ourPieceValues.Count ? 0 : opponentTotalPieceValue)} total value that would be lost in an exchange chain, whilst we have {ourPieceValues.Count} pieces attacking of {ourTotalPieceValue} total value.";
             return false;
         }
         /// If the opponent is looking at a square with LESS pieces, and their pieces are of HIGHER value - SAFE
@@ -1005,16 +1114,16 @@ public class MyBot : IChessBot
         {
             /// Recalculate total opponent piece value to be the amount of piece value that would be lost in this potential exchange.
             opponentTotalPieceValue = 0;
-            for (int i = 0; i < ourPieceValues.Count; i++)            
+            for (int i = 0; i < (move.IsCapture ? ourPieceValues.Count : ourPieceValues.Count - 1); i++)            
                 opponentTotalPieceValue += opponentPieceValues[i];
 
             moveLogic = $"CASE 3 Opponent has {opponentPieceValues.Count} pieces defending of {opponentTotalPieceValue} total value that would be lost in an exchange chain, whilst we have {ourPieceValues.Count} pieces attacking of {ourTotalPieceValue} total value.";
 
             /// Allow equal exchanges if we are ahead in material by 1 piece.
-            //if (pieceValueDelta >= 300)
+            if (pieceValueDelta >= 100)
                 return opponentTotalPieceValue >= ourTotalPieceValue;
-            //else
-                //return opponentTotalPieceValue > ourTotalPieceValue;
+            else
+                return opponentTotalPieceValue > ourTotalPieceValue;
         }
         /// If the opponent is looking at a square with LESS pieces, and their pieces are of LOWER value - DEPENDS - Exclude our pieces that would not be lost (x number of highest value pieces)
         else if (opponentPieceValues.Count < ourPieceValues.Count && opponentTotalPieceValue < ourTotalPieceValue)
@@ -1027,10 +1136,10 @@ public class MyBot : IChessBot
             moveLogic = $"CASE 4 Opponent has {opponentPieceValues.Count} pieces defending of {opponentTotalPieceValue} total value that would be lost in an exchange chain, whilst we have {ourPieceValues.Count} pieces attacking of {ourTotalPieceValue} total value.";
 
             /// Allow equal exchanges if we are ahead in material by 1 piece.
-            //if (pieceValueDelta >= 300)
+            if (pieceValueDelta >= 100)
                 return opponentTotalPieceValue >= ourTotalPieceValue;
-            //else
-                //return opponentTotalPieceValue > ourTotalPieceValue;
+            else
+                return opponentTotalPieceValue > ourTotalPieceValue;
         }
 
         throw new Exception($"Should not occur! We had {ourPieceValues.Count} pieces attacking and our opponent had {opponentPieceValues.Count} pieces - Our value was {ourTotalPieceValue} whilst our opponents was {opponentTotalPieceValue}");
@@ -1043,6 +1152,14 @@ public class MyBot : IChessBot
     {
         var kingSquare = board.GetKingSquare(isWhite);
         return Math.Abs(kingSquare.File - targetSquare.File) + Math.Abs(kingSquare.Rank - targetSquare.Rank);
+    }
+
+    private int GetKingsDistanceFromSquarePostMove(Board board, Move move, Square targetSquare, bool isWhite)
+    {
+        board.MakeMove(move);
+        var distance = GetKingsDistanceFromSquare(board, targetSquare, isWhite);
+        board.UndoMove(move);
+        return distance;
     }
 
     /// <summary>
@@ -1078,6 +1195,12 @@ public class MyBot : IChessBot
         return stackedPawnCount;
     }
 
+    /// <summary>
+    /// Returns the safety of the King based on the amount of legal moves it has.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="opponentsKing"></param>
+    /// <returns></returns>
     private int GetKingSafety(Board board, bool opponentsKing)
     {
         if (opponentsKing)
@@ -1095,6 +1218,13 @@ public class MyBot : IChessBot
         return kingLegalMoveCount;
     }
 
+    /// <summary>
+    /// Returns the safety of the King based on the number of legal moves it has after this move is made.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <param name="opponentsKing"></param>
+    /// <returns></returns>
     private int GetKingSafetyPostMove(Board board, Move move, bool opponentsKing)
     {
         board.MakeMove(move); 
@@ -1106,6 +1236,11 @@ public class MyBot : IChessBot
         return kingLegalMoveCount;
     }
 
+    /// <summary>
+    /// Returns an evaluation of how much control is exerted over the board, weighted to encourage controlling the opponents side more than our own.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <returns></returns>
     private int GetBoardControlScore(Board board)
     {
         var boardControlScore = 0;
@@ -1113,7 +1248,6 @@ public class MyBot : IChessBot
 
         int[] scores = new int[8] { 1, 1, 1, 2, 3, 4, 5, 6};
 
-        // TODO: Check if reverse is correct for White or not.
         if (!board.IsWhiteToMove)
             Array.Reverse(scores);
 
@@ -1134,6 +1268,12 @@ public class MyBot : IChessBot
         return boardControlScore;
     }
 
+    /// <summary>
+    /// Returns an evaluation of how much control is exerted over the board after this move is made.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="move"></param>
+    /// <returns></returns>
     private int GetBoardControlScorePostMove(Board board, Move move)
     {
         board.MakeMove(move);
@@ -1144,10 +1284,25 @@ public class MyBot : IChessBot
         return boardControlScore;
     }
 
-    private bool IsSquareDefended(Board board, Square targetSquare, Square startSquare)
+    /// <summary>
+    /// Returns whether the target square is defended by another piece of our own.
+    /// </summary>
+    /// <param name="board"></param>
+    /// <param name="targetSquare"></param>
+    /// <param name="startSquare"></param>
+    /// <returns></returns>
+    private bool IsSquareDefended(Board board, Square targetSquare, Square startSquare, bool opponentView)
     {
-        if (!IsSquareSafe(board, targetSquare))
+        if (opponentView)
+            board.ForceSkipTurn();
+
+        var isSafe = IsSquareSafe(board, targetSquare);
+        if (!isSafe)
+        {
+            if (opponentView)
+                board.UndoSkipTurn();
             return false;
+        }
 
         var squareDefended = false;
 
@@ -1162,6 +1317,9 @@ public class MyBot : IChessBot
                 break;
             }
         }
+
+        if (opponentView)
+            board.UndoSkipTurn();
 
         return squareDefended;
     }
